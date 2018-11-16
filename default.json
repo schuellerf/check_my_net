@@ -1,0 +1,4 @@
+[ {"target": "192.168.0.1", "hint": "Router Example"},
+  {"target": "1.1.1.1", "hint": "DNS Example"},
+  {"target": "github.com"}
+]
