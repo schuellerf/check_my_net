@@ -13,6 +13,7 @@ import (
 
 	"github.com/docopt/docopt-go"
 	"github.com/schuellerf/go-ping"
+	"github.com/aeden/traceroute"
 )
 
 var usage = `Check My Net
@@ -21,7 +22,7 @@ and see if the important nodes are up.
 
 Usage:
   check_my_net ping [--count=<int>] [--interval=<time.Duration>] [--json=<Filename>]
-  check_my_net server [--interval=<time.Duration>] [--json=<Filename>]
+  check_my_net server [--interval=<time.Duration>] [--maxHops=<Int>] [--json=<Filename>]
 
 Options:
   -h --help                      Show this screen.
@@ -29,6 +30,7 @@ Options:
   -c --count=<int>               Number of pings to complete [default: 1].
   -i --interval=<time.Duration>  Interval between pings [default: 5s].
   -j --json=<Filename>           JSON file with "ping_targets"
+  -h --maxHops=<int>             Number of hops to check to the internet [default: 2].
 `
 
 var hint_format = "%v (%v)"
@@ -133,6 +135,29 @@ func pingWorker(ch chan<- result, addr *ping_target, timeout time.Duration, inte
 	}
 }
 
+func traceRouteWorker(hop_ch chan<- traceroute.TracerouteHop, traceTarget string, interval time.Duration, maxHops int) {
+
+	for {
+        opts := new(traceroute.TracerouteOptions)
+        opts.SetMaxHops(maxHops)
+        out, err := traceroute.Traceroute(traceTarget, opts)
+        if err == nil {
+            if len(out.Hops) == 0 {
+                fmt.Printf("TestTraceroute failed. Expected at least one hop\n")
+                return
+            }
+        } else {
+            fmt.Printf("Traceroute error: %v", err)
+            return
+        }
+
+        for _, hop := range out.Hops {
+            hop_ch <- hop
+        }
+        time.Sleep(interval)
+	}
+}
+
 func max_len(list *[]ping_target, hint_format string) int {
 	r := 0
 	for i := range *list {
@@ -148,7 +173,7 @@ func max_len(list *[]ping_target, hint_format string) int {
 	}
 	return r
 }
-func prettyPrint(a *result) {
+func prettyPrintPing(a *result) {
 	var host string
 
 	host = a.addr.print_line
@@ -170,6 +195,10 @@ func prettyPrint(a *result) {
 			a.addr.status)
 	}
 }
+func printHop(hop traceroute.TracerouteHop) {
+	fmt.Printf("%-3d %v (%v)  %v\n", hop.TTL, hop.HostOrAddressString(), hop.AddressString(), hop.ElapsedTime)
+}
+
 func main() {
     var addrs []ping_target
 	rand.Seed(time.Now().UTC().UnixNano())
@@ -177,13 +206,18 @@ func main() {
 	args, err := docopt.ParseArgs(usage, os.Args[1:], "0.0.1")
 	if err != nil {
 		panic(err)
-	}
+    }
+    maxHops, err := args.Int("--maxHops")
+    if err != nil {
+		panic(err)
+    }
+
 	count, err := args.Int("--count")
-	fmt.Printf("%v\n", args)
 	interval_arg, err := args.String("--interval")
 	if err != nil {
 		panic(err)
 	}
+
 	interval, err := time.ParseDuration(interval_arg)
 
 	if err != nil {
@@ -226,6 +260,7 @@ func main() {
 	signal.Notify(c, os.Interrupt)
 	signal.Notify(c, syscall.SIGTERM)
 	ch := make(chan result)
+	hop_ch := make(chan traceroute.TracerouteHop)
 
 	if cmd_ping {
 
@@ -244,7 +279,7 @@ func main() {
 
 			select {
 			case r := <-ch:
-				prettyPrint(&r)
+                prettyPrintPing(&r)
 			case <-c:
 				close(ch)
 				return
@@ -258,12 +293,15 @@ func main() {
             panic("No IPs found in json file...")
         }
 		results := make(map[string]result)
+		hops := make(map[int]traceroute.TracerouteHop)
 		start_time := time.Now()
 		for i := range addrs {
 			addrs[i].lastUpdate = start_time
 			go pingWorker(ch, &addrs[i], interval, interval, -1)
 			results[addrs[i].Target] = result{addr: &addrs[i], err: "No reply yet"}
-		}
+        }
+
+		go traceRouteWorker(hop_ch, "1.1.1.1", interval, maxHops)
 
 		max_width = max_len(&addrs, hint_format)
 
@@ -272,23 +310,37 @@ func main() {
 			select {
 			case r := <-ch:
 				results[r.addr.Target] = r
-
-				fmt.Printf("\033[2J\033[H--- \n\n")
-
-				keys := make([]string, 0, len(results))
-				for k := range results {
-					keys = append(keys, k)
-				}
-				sort.Strings(keys)
-
-				for _, k := range keys {
-					a := results[k]
-					prettyPrint(&a)
-				}
+            case h := <-hop_ch:
+                hops[h.TTL] = h
 			case <-c:
 				close(ch)
 				return
-			}
+            }
+            fmt.Printf("\033[2J\033[H--- \n\n")
+
+            fmt.Printf("Ping:\n")
+
+            keys := make([]string, 0, len(results))
+            for k := range results {
+                keys = append(keys, k)
+            }
+            sort.Strings(keys)
+
+            for _, k := range keys {
+                a := results[k]
+                prettyPrintPing(&a)
+            }
+
+            fmt.Printf("\nFirst %v Hops:\n", maxHops)
+            h_keys := make([]int, 0, len(hops))
+            for k := range hops {
+                h_keys = append(h_keys, k)
+            }
+            sort.Ints(h_keys)
+            for _,k := range h_keys {
+                h := hops[k]
+                printHop(h)
+            }
 		}
 	}
 }
