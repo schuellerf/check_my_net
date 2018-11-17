@@ -29,7 +29,7 @@ Options:
   --version                      Show version.
   -c --count=<int>               Number of pings to complete [default: 1].
   -i --interval=<time.Duration>  Interval between pings [default: 5s].
-  -j --json=<Filename>           JSON file with "ping_targets"
+  -j --json=<Filename>           JSON file with "ping_targets [default: default.json]"
   -h --maxHops=<int>             Number of hops to check to the internet [default: 2].
 `
 
@@ -236,15 +236,18 @@ func main() {
     if len(json_filename) > 0 {
         jsonFile, err := os.Open(json_filename)
         if err != nil {
-            panic(err)
-        }
-        defer jsonFile.Close()
-        byteValue, _ := ioutil.ReadAll(jsonFile)
+            if err.(*os.PathError).Err == syscall.ENOENT {
+                fmt.Printf("Ignoring that default.json does not exist\n")
+            } else {
+                panic(err)
+            }
+        } else {
+            defer jsonFile.Close()
+            byteValue, _ := ioutil.ReadAll(jsonFile)
 
-        fmt.Printf("bytes: %s\n", byteValue)
-        json.Unmarshal(byteValue, &addrs)
-        fmt.Printf("json: %v\n", addrs)
-        use_default = false
+            json.Unmarshal(byteValue, &addrs)
+            use_default = false
+        }
     }
     if use_default {
 
