@@ -196,7 +196,7 @@ func prettyPrintPing(a *result) {
 	}
 }
 func printHop(hop traceroute.TracerouteHop) {
-	fmt.Printf("%-3d %v (%v)  %v\n", hop.TTL, hop.HostOrAddressString(), hop.AddressString(), hop.ElapsedTime)
+	fmt.Printf("%-3d %-15v %v\n", hop.TTL, hop.AddressString(), hop.ElapsedTime)
 }
 
 func main() {
