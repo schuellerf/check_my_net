@@ -35,6 +35,9 @@ Options:
 
 var hint_format = "%v (%v)"
 var max_width int
+var color_warning = "\033[33m"
+var color_err = "\033[31m"
+var color_default = "\033[39m"
 
 type result struct {
 	addr *ping_target
@@ -55,7 +58,7 @@ type ping_target struct {
 func getOnRecvFunc(ch chan<- result, ret result, pinger *ping.Pinger, timeout time.Duration) func(*ping.Packet) {
 	return func(pkt *ping.Packet) {
 
-		ret.addr.lastUpdate = time.Now()
+		ret.addr.lastUpdate = time.Now().Local()
 		stats := pinger.Statistics()
 		ret.addr.responseTime = stats.MaxRtt
 		ipaddr := pinger.IPAddr()
@@ -82,12 +85,12 @@ func getOnRecvFunc(ch chan<- result, ret result, pinger *ping.Pinger, timeout ti
 
 func getOnFinishFunc(ch chan<- result, ret result, pinger *ping.Pinger, timeout time.Duration) func(*ping.Statistics) {
 	return func(stats *ping.Statistics) {
-		ret.addr.lastUpdate = time.Now()
+		ret.addr.lastUpdate = time.Now().Local()
 		ret.addr.responseTime = stats.MaxRtt
 
 		if (pinger.Count != -1 && stats.PacketsRecv != pinger.Count) ||
 			(pinger.Count == -1 && stats.PacketsRecv == 0) {
-			ret.err = fmt.Sprintf("Timeout after %0.1fs (%v/%v)", timeout.Seconds(), stats.PacketsRecv, pinger.Count)
+			ret.err = fmt.Sprintf("%sTimeout after %0.1fs (%v/%v)%s", color_err, timeout.Seconds(), stats.PacketsRecv, pinger.Count, color_default)
 			ch <- ret
 		}
 	}
@@ -100,7 +103,7 @@ func pingWorker(ch chan<- result, addr *ping_target, timeout time.Duration, inte
 		pinger, err := ping.NewPinger(addr.Target)
 		if err != nil {
 			ret.err = err.Error()
-			ret.addr.lastUpdate = time.Now()
+			ret.addr.lastUpdate = time.Now().Local()
 			//fmt.Printf("async error: %s %s\n", addr.Target, ret.err)
 			ch <- ret
 			// for the "count down" usecase
@@ -173,13 +176,14 @@ func max_len(list *[]ping_target, hint_format string) int {
 	}
 	return r
 }
-func prettyPrintPing(a *result) {
+func prettyPrintPing(a *result, interval *time.Duration ) {
 	var host string
+    var color_start string
 
 	host = a.addr.print_line
 	if len(a.err) > 0 {
 		// print the error message
-		format := fmt.Sprintf("%%-%ds\t ---.---ms %%v (ERR: %%s; last online: %%v)\n", max_width)
+		format := fmt.Sprintf("%s%%-%ds%s\t ---.---ms %%v (%sERR: %%s%s; last online: %%v)\n", color_err, max_width, color_default,color_err, color_default)
 		if a.addr.lastOnlineTime.IsZero() {
 			fmt.Printf(format, host, a.addr.lastUpdate.Format(time.StampMilli), a.err, "never")
 		} else {
@@ -187,12 +191,18 @@ func prettyPrintPing(a *result) {
 		}
 	} else {
 
-		format := fmt.Sprintf("%%-%ds\t%%8.3fms %%v (%%v)\n", max_width)
+        if time.Now().Local().Unix() - a.addr.lastUpdate.Unix() > int64(interval.Seconds()) {
+            color_start = color_warning
+        } else {
+            color_start = color_default
+        }
+		format := fmt.Sprintf("%%-%ds\t%%8.3fms %s%%v%s (%%v - %%vs ago)\n", max_width, color_start, color_default)
 		fmt.Printf(format,
 			host,
 			a.addr.responseTime.Seconds()*1000,
 			a.addr.lastUpdate.Format(time.StampMilli),
-			a.addr.status)
+			a.addr.status,
+            time.Now().Local().Unix() - a.addr.lastUpdate.Unix())
 	}
 }
 func printHop(hop traceroute.TracerouteHop) {
@@ -201,7 +211,7 @@ func printHop(hop traceroute.TracerouteHop) {
 
 func main() {
     var addrs []ping_target
-	rand.Seed(time.Now().UTC().UnixNano())
+	rand.Seed(time.Now().Local().UnixNano())
 
 	args, err := docopt.ParseArgs(usage, os.Args[1:], "0.0.1")
 	if err != nil {
@@ -282,7 +292,7 @@ func main() {
 
 			select {
 			case r := <-ch:
-                prettyPrintPing(&r)
+                prettyPrintPing(&r, &interval)
 			case <-c:
 				close(ch)
 				return
@@ -297,7 +307,7 @@ func main() {
         }
 		results := make(map[string]result)
 		hops := make(map[int]traceroute.TracerouteHop)
-		start_time := time.Now()
+		start_time := time.Now().Local()
 		for i := range addrs {
 			addrs[i].lastUpdate = start_time
 			go pingWorker(ch, &addrs[i], interval, interval, -1)
@@ -321,7 +331,7 @@ func main() {
             }
             fmt.Printf("\033[2J\033[H--- \n\n")
 
-            fmt.Printf("Ping:\n")
+            fmt.Printf("Ping: %v\n", time.Now().Local().Format(time.Stamp))
 
             keys := make([]string, 0, len(results))
             for k := range results {
@@ -331,7 +341,7 @@ func main() {
 
             for _, k := range keys {
                 a := results[k]
-                prettyPrintPing(&a)
+                prettyPrintPing(&a, &interval)
             }
 
             fmt.Printf("\nFirst %v Hops:\n", maxHops)
