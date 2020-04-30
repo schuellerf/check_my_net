@@ -10,10 +10,11 @@ import (
     "time"
     "encoding/json"
     "io/ioutil"
+    "runtime"
 
 	"github.com/docopt/docopt-go"
 	"github.com/schuellerf/go-ping"
-	"github.com/aeden/traceroute"
+	"github.com/schuellerf/traceroute"
 )
 
 var usage = `Check My Net
@@ -101,6 +102,9 @@ func pingWorker(ch chan<- result, addr *ping_target, timeout time.Duration, inte
 
 	for {
 		pinger, err := ping.NewPinger(addr.Target)
+		if runtime.GOOS == "windows" {
+			pinger.SetPrivileged(true)
+		}
 		if err != nil {
 			ret.err = err.Error()
 			ret.addr.lastUpdate = time.Now().Local()
@@ -314,7 +318,9 @@ func main() {
 			results[addrs[i].Target] = result{addr: &addrs[i], err: "No reply yet"}
         }
 
-		go traceRouteWorker(hop_ch, "1.1.1.1", interval, maxHops)
+		if runtime.GOOS != "windows" {
+			go traceRouteWorker(hop_ch, "1.1.1.1", interval, maxHops)
+		}
 
 		max_width = max_len(&addrs, hint_format)
 
